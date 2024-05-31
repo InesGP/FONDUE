@@ -9,6 +9,7 @@ https://gist.github.com/rachit221195/91d5b6e96f5d268af8842235529f88c2#file-load_
 import torch
 import shutil
 from glob import glob
+import os
 
 def save_ckp(state, is_best, checkpoint_dir, best_model_dir):
     ckpt_name, best_model_name = get_ckp_names(state['epoch'])
@@ -17,7 +18,19 @@ def save_ckp(state, is_best, checkpoint_dir, best_model_dir):
     if is_best:
         best_fpath = best_model_dir + best_model_name
         shutil.copyfile(f_path, best_fpath)
-        
+
+def save_quantized_ckp(state, is_best, checkpoint_dir, best_model_dir):
+    _, ext = os.path.splitext(checkpoint_dir)
+    basefname = checkpoint_dir[:-(len(ext))]
+    f_path = basefname + "_quant" + ext
+    torch.save(state, f_path)
+    
+
+def load_ckp_nets_only(checkpoint_fpath, netG, device):
+    checkpoint = torch.load(checkpoint_fpath, map_location=device)
+    netG.load_state_dict(checkpoint['state_dict'])
+    return netG
+
 def load_ckp(checkpoint_fpath, model, optimizer, scheduler):
     checkpoint = torch.load(checkpoint_fpath)
     model.load_state_dict(checkpoint['state_dict'])
@@ -26,8 +39,13 @@ def load_ckp(checkpoint_fpath, model, optimizer, scheduler):
     best_loss = checkpoint['best_loss']
     return model, optimizer, scheduler, checkpoint['epoch'], best_loss
 
-def load_model(checkpoint_fpath, model):
+def load_pretrained_netG(checkpoint_fpath, model, optimizer, scheduler):
     checkpoint = torch.load(checkpoint_fpath)
+    model.load_state_dict(checkpoint['state_dict'])
+    return model
+
+def load_model(checkpoint_fpath, model, device):
+    checkpoint = torch.load(checkpoint_fpath, map_location = torch.device(device))
     model.load_state_dict(checkpoint['state_dict'])
     return model
 
@@ -51,33 +69,22 @@ def get_last_ckp_path(config):
     last_ckp_path=model_list[num_models-1]
     return last_ckp_path
 
-# def get_best_ckp_path(config):
-#     path = config.model_path
-#     name = config.name
-#     models_filepath =  path + '/'+name+'.pt'    
-#     model_list = glob(models_filepath)
-#     num_models = len(model_list)
-#     last_ckp_path=model_list[num_models-1]
-#     return last_ckp_path
+def get_last_ckp_path_preprocessing(config):
+    path = config['ckp_path_preprocessing']
+    models_filepath =  path + '/*.pt'    
+    model_list = glob(models_filepath)
+    num_models = len(model_list)
+    last_ckp_path=model_list[num_models-1]
+    return last_ckp_path
+
 def get_best_ckp_path(config):
     path = config.model_path
-    # name = config.name
-    # models_filepath =  path + '/'+name+'.pt'    
     return path
 
-
-def get_best_ckp_path_first_stage(config):
-    path_first = config.model_path_first_stage
-    # path_second = config.model_path_second_stage
-    # name = config.name
-    # models_filepath =  path + '/'+name+'.pt'    
-    return path_first
-
-def get_best_ckp_path_second_stage(config, second_stage_type):
-    if second_stage_type == "low":
-        path = config.model_path_second_stage_low
-    elif second_stage_type == "mid":
-        path = config.model_path_second_stage_mid
-    # name = config.name
-    # models_filepath =  path + '/'+name+'.pt'    
-    return path
+def get_best_ckp_path_old(config):
+    path = config.model_path
+    models_filepath =  path + '/*.pt'    
+    model_list = glob(models_filepath)
+    num_models = len(model_list)
+    last_ckp_path=model_list[num_models-1]
+    return last_ckp_path
