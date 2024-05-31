@@ -108,6 +108,7 @@ def options_parse():
     parser.add_argument('--name', type = str, default='fondue_a',
                         choices=['fondue_a', 'fondue_b', 'fondue_b1', 'fondue_b2'],
                         help='model name')
+    parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
     
     aux_parser = parser.parse_args()
     iname = aux_parser.iname
@@ -162,7 +163,6 @@ def options_parse():
                         help="order of interpolation (0=nearest,1=linear(default),2=quadratic,3=cubic)")
     
     # 6. Clean up and GPU/CPU options (disable cuda, change batchsize)
-    parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
     parser.add_argument('--batch_size', type=int, default=1, help="Batch size for inference. Default: 1")
     parser.add_argument('--conform_type', type=int, default=2, 
                         help="0: conform to regular volume size to the largest available and voxel size to smallest available || 1: conform to 256^3 and 1mm isotropic voxel size || 2: do not change image size or shape")
@@ -223,6 +223,9 @@ def run_network(img_filename, zoom, orig_data, denoised_image, plane, params_mod
 
     test_data_loader = DataLoader(dataset=test_dataset, shuffle=False,
                                   batch_size=params_model["batch_size"])
+
+    print(params_model["use_cuda"])
+
     if params_model["use_cuda"]:
         model = model.cuda()
     best_ckp_path = get_best_ckp_path(args)
@@ -231,40 +234,62 @@ def run_network(img_filename, zoom, orig_data, denoised_image, plane, params_mod
     print('======CHECKPOINT LOADED======')
             
     model.eval()
+    # torch.save(model, 'fondue_model.pth')
+    # exit(0)
+
+    print("Model: ")
+    print(model)
 
     logger.info("{} model loaded.".format(plane))
     with torch.no_grad():
 
-        start_index = 0
+        start_index = 126
+        # batch_idx = 126
+        # sample_batch = test_dataset[batch_idx]
+        # x = sample_batch["image"]
+        # x = x.reshape(1, x.shape[0], x.shape[1], x.shape[2])
+        # t = torch.from_numpy(x)
         for batch_idx, sample_batch in enumerate(test_data_loader):
+            # TAB HERE VVVV
+           
             images_batch = Variable(sample_batch["image"])
+            # images_batch = Variable(t)
             images_batch = images_batch.permute(0, 3, 1, 2) #Reshape from [BS, input_h, input_w, thickslice_size] to [BS, thickslice_size, input_h, input_w]
             images_batch = images_batch.float() #Transform to float to fit the network
-            if params_model["use_cuda"]:
-                images_batch = images_batch.cuda()
+            # if params_model["use_cuda"]:
+            #     images_batch = images_batch.cuda()
             
-            with torch.cuda.amp.autocast():
-                temp,_,_,_,_,_,_ = model(images_batch, zoom)
-            
-            output = temp
-            temp = output
-            if plane == "Axial":
-                temp = temp.permute(2, 3, 0, 1)
-                denoised_image[:, :, start_index:start_index + temp.shape[2], :] += torch.mul(temp.cpu(), 1)
-                start_index += temp.shape[2]
 
-            elif plane == "Coronal":
-                temp = temp.permute(3, 0, 2, 1)
-                denoised_image[:, start_index:start_index + temp.shape[1], :, :] += torch.mul(temp.cpu(), 1)
-                start_index += temp.shape[1]
 
-            else:
-                temp = temp.permute(0, 2, 3, 1)
-                denoised_image[start_index:start_index + temp.shape[0], :, :, :] += torch.mul(temp.cpu(), 1)
-                start_index += temp.shape[0]
-            
-            logger.info("--->Batch {} {} Testing Done.".format(batch_idx, plane))
+            if batch_idx == 126:
+                # print("START INDEX: ")
+                # print(start_index)
+                # print("TEMP SHAPE: ")
+                # print(temp.shape)
 
+                with torch.cuda.amp.autocast():
+                    temp,_,_,_,_,_,_ = model(images_batch, zoom) 
+
+                output = temp
+                temp = output
+                if plane == "Axial":
+                    temp = temp.permute(2, 3, 0, 1)
+                    denoised_image[:, :, start_index:start_index + temp.shape[2], :] += torch.mul(temp.cpu(), 1)
+                    start_index += temp.shape[2]
+
+                elif plane == "Coronal":
+                    temp = temp.permute(3, 0, 2, 1)
+                    denoised_image[:, start_index:start_index + temp.shape[1], :, :] += torch.mul(temp.cpu(), 1)
+                    start_index += temp.shape[1]
+
+                else:
+                    temp = temp.permute(0, 2, 3, 1)
+                    denoised_image[start_index:start_index + temp.shape[0], :, :, :] += torch.mul(temp.cpu(), 1)
+                    start_index += temp.shape[0]
+                
+                logger.info("--->Batch {} {} Testing Done.".format(batch_idx, plane))
+
+            # TAB HERE ^^^ 
     return denoised_image
 
 
@@ -327,6 +352,8 @@ def resunetcnn(img_filename, save_as, save_as_new_orig, logger, args):
     
     # Put it onto the GPU or CPU
     use_cuda = not args.no_cuda and torch.cuda.is_available()
+    print(use_cuda)
+    print("cuda" if use_cuda else "cpu")
     device = torch.device("cuda" if use_cuda else "cpu")
     logger.info("Cuda available: {}, # Available GPUS: {}, "
                 "Cuda user disabled (--no_cuda flag): {}, "
@@ -359,20 +386,20 @@ def resunetcnn(img_filename, save_as, save_as_new_orig, logger, args):
         logger.info("Axial View Tested in {:0.4f} seconds".format(time.time() - start))
 
     # Coronal Prediction
-    if (anisotropic and irr_pos == "Coronal") or not anisotropic:
-        start = time.time()
-        denoised_image = run_network(img_filename, orig_zoom,
-                                orig_data, denoised_image, "Coronal",
-                                params_model, model, logger, args, anisotropic)
-        logger.info("Coronal View Tested in {:0.4f} seconds".format(time.time() - start))
+    # if (anisotropic and irr_pos == "Coronal") or not anisotropic:
+    #     start = time.time()
+    #     denoised_image = run_network(img_filename, orig_zoom,
+    #                             orig_data, denoised_image, "Coronal",
+    #                             params_model, model, logger, args, anisotropic)
+    #     logger.info("Coronal View Tested in {:0.4f} seconds".format(time.time() - start))
 
-    # # Sagittal Prediction
-    if (anisotropic and irr_pos == "Sagittal") or not anisotropic:
-        start = time.time()
-        denoised_image = run_network(img_filename, orig_zoom,
-                                orig_data, denoised_image, "Sagittal",
-                                params_model, model, logger, args, anisotropic)
-        logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
+    # Sagittal Prediction
+    # if (anisotropic and irr_pos == "Sagittal") or not anisotropic:
+    #     start = time.time()
+    #     denoised_image = run_network(img_filename, orig_zoom,
+    #                             orig_data, denoised_image, "Sagittal",
+    #                             params_model, model, logger, args, anisotropic)
+    #     logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
         
     
     if not anisotropic:
