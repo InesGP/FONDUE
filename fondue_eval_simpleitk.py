@@ -56,7 +56,7 @@ def options_parse():
     # ======== INPUT/OUTPUT FILENAMES OPTIONS =============
     parser.add_argument('--in_name', '--input_name', dest='iname', type=str, 
                         help='name of file to process',
-                        default="C:/Users/walte/Dropbox/nlmupsample/uh500/uh500.nii.gz")
+                        default=None)
     parser.add_argument('--out_name', '--output_name', dest='oname', type=str,
                         help='Output filename')
     parser.add_argument('--iname_new', type=str, default=None,
