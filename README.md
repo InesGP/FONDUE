@@ -9,13 +9,13 @@ FONDUE is a Convolutional Neural Network intended for denoising anatomical MR Im
 FONDUE has been thoroughly tested on T1w in-vivo images with resolutions ranging from 1.5mm to 0.25mm of voxel size, GE, Philips, and Siemens scanners, and Magnetic Fields of 1.5T to 7T. Our tests suggest that the best results will be obtained when using input images with voxel sizes close to isotropic.
 
 # Usage of the method
-The following are the possible inputs that the evaluation pipeline "fondue_eval.py" can get:
+The following are the possible inputs that the evaluation pipeline "fondue_eval_simpleitk.py" can get:
 
-`--in_name`: string containing the full path to the image to be denoised. Valid input extensions: ".nii", ".nii.gz", ".mgh", ".mgz", ".mnc".
+`--in_name`: string containing the full path to the image to be denoised. Valid input extensions: ".nii", ".nii.gz", ".mnc".
 
 `--suffix`: string containing the suffix of the denoised image. By default, it is the name of the network to be used (default network is 'fondue_a').
 
-`--ext`: extension that will be used for the output files. By default, it will use the same as the input file specified in `--in_name`. Valid output extensions: ".nii", ".nii.gz", ".mgh", ".mgz". NOTE: ".mnc" file formats will be read and processed, but will be stored by default in ".nii" format. 
+`--ext`: extension that will be used for the output files. By default, it will use the same as the input file specified in `--in_name`. Valid output extensions: ".nii", ".nii.gz", ".mnc"
 
 `--out_name`: string containing the full path to the file where the image will be stored WITHOUT EXTENSION. By default, it will be the base name of `in_name` + "_"`suffix` + `ext`.
 
@@ -23,7 +23,7 @@ The following are the possible inputs that the evaluation pipeline "fondue_eval.
 
 `--in_name_new`: string containing the full path without extension of the input image indicated in "in_name" after the resampling and change of zooms. It will only be used if "keep_dims" is False. By default, it will be the base name of "in_name" + "_orig" + "ext".
 
-`--intensity_range_mode`: integer between 0 and 2 that indicates the desired intensity range of the output (denoised) and the resampled input (file indicated in in_name_new). 0 for [0 - 255] (default), 1 for [original_min - original_max] (not recommended due to lack of testing), and 2 for [0 - 1].
+`--intensity_range_mode`: integer between 0 and 2 that indicates the desired intensity range of the output (denoised) and the resampled input (file indicated in in_name_new). 0 for [0 - 255], 1 for [original_min - original_max] (not recommended due to lack of testing), and 2 for original range (default).
 
 `--order`: integer from 0 to 3 indicating the order of interpolation in case an interpolation is performed during processing. (0=nearest,1=linear(default),2=quadratic,3=cubic)
 
