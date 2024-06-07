@@ -35,7 +35,7 @@ import torch
 from torchvision import transforms as trf
 from skimage.measure import label
 from torch.utils.data.dataset import Dataset
-from .conform import is_conform, is_conform_itk, conform, check_affine_in_nifti, check_affine_in_nifti_itk, std_pos, conform_std, conform_mask, conform_std_mask, conform_keep_dims, conform_itk
+from .conform import is_conform, is_conform_itk, conform, check_affine_in_nifti, check_affine_in_nifti_itk, std_pos, conform_std, conform_mask, conform_std_mask, conform_keep_dims, conform_itk, conform_fix
 from data_loader import common
 from torch.utils.data.sampler import Sampler
 from numpy import array
@@ -47,12 +47,132 @@ from PIL import Image
 # from scipy.interpolate import interpn as rgi
 supported_output_file_formats = ['mgz', 'nii', 'nii.gz']
 from datetime import datetime
+import matplotlib.pyplot as plt
+
+class AsegDatasetWithAugmentation(Dataset):
+    """
+    Class for loading aseg file with augmentations (transforms)
+    """
+    def __init__(self, params, transforms=None, is_val = False):
+
+        # Load the h5 file and save it to the dataset
+        try:
+            self.params = params
+
+            # Open file in reading mode
+            with h5py.File(self.params['dataset_name'], "r") as hf:
+                self.images = np.array(hf.get('orig_dataset_imgs')[:])
+                self.orig_zooms = np.array(hf.get('orig_zooms')[:])
+                self.subjects = np.array(hf.get("subject")[:])
+            self.count = self.images.shape[0]
+            self.transforms = transforms
+            
+            print("Successfully loaded {} with plane: {}".format(params["dataset_name"], params["plane"]))
+
+        except Exception as e:
+            print("Loading failed: {}".format(e))
+
+    def get_subject_names(self):
+        return self.subjects
+    
+    def _get_patch(self, img):
+        img = np.moveaxis(img,(0,1,2),(2,1,0))
+        img = img/255.0
+        return img
+    
+    def __getitem__(self, index):
+
+        img = self.images[index]
+        zoom = self.orig_zooms[index]
+        img = self._get_patch(img)
+        return {'img': img, 'zoom':zoom}
+    def __len__(self):
+        return self.count
+    
+    def concatenate_Thick_GT(self, lr, hr):
+        hr = torch.from_numpy(hr)
+        hr2 = hr.float()
+        hr2 = torch.unsqueeze(hr,0)
+        lr = torch.from_numpy(lr)
+        lrhr = torch.cat([hr2,lr],0) #first 7 arrays of dim 0 are lr, last is hr
+        return lrhr
+    
+class MyBatchSampler(Sampler):
+    def __init__(self, a_indices, b_indices, c_indices, d_indices, e_indices, f_indices, g_indices,  batch_size): 
+        self.a_indices = a_indices
+        self.b_indices = b_indices
+        self.c_indices = c_indices
+        self.d_indices = d_indices
+        self.e_indices = e_indices
+        self.f_indices = f_indices
+        self.g_indices = g_indices
+        self.batch_size = batch_size
+    
+    def __iter__(self):
+        random.shuffle(self.a_indices)
+        random.shuffle(self.b_indices)
+        random.shuffle(self.c_indices)
+        random.shuffle(self.d_indices)
+        random.shuffle(self.e_indices)
+        random.shuffle(self.f_indices)
+        random.shuffle(self.g_indices)
+        a_batches = chunk(self.a_indices, self.batch_size)
+        b_batches = chunk(self.b_indices, self.batch_size)
+        c_batches = chunk(self.c_indices, self.batch_size)
+        d_batches = chunk(self.d_indices, self.batch_size)
+        e_batches = chunk(self.e_indices, self.batch_size)
+        f_batches = chunk(self.f_indices, self.batch_size)
+        g_batches = chunk(self.g_indices, self.batch_size)
+        all_batches = list(a_batches + b_batches + c_batches + d_batches + e_batches + f_batches + g_batches)
+        all_batches = [batch.tolist() for batch in all_batches]
+        random.shuffle(all_batches)
+        return iter(all_batches)
+    
+    def __len__(self):
+        return (len(self.a_indices) + len(self.b_indices) + len(self.c_indices) + len(self.d_indices) + len(self.e_indices) + len(self.f_indices) + len(self.g_indices)) // self.batch_size
 
 
-##
-# Helper Functions
-##
-
+def torchshow(temp, images_batch):
+  # Crear un grid de 2 imágenes horizontales
+  fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+  # Extraer la rebanada 0 del primer eje de temp y image_batch
+  slice_temp = temp[0, 0, :, :].cpu() # Asegurarse de que está en la cpu
+  slice_image_batch = images_batch[0, 0, :, :].cpu() # Asegurarse de que está en la cpu
+  # Convertir los tensores a numpy arrays
+  array_temp = slice_temp.numpy()
+  array_image_batch = slice_image_batch.numpy()
+  # Mostrar los arrays con imshow en cada imagen
+  axes[0].imshow(array_temp)
+  axes[1].imshow(array_image_batch)
+  # Añadir los títulos de las imágenes
+  axes[0].set_title("temp")
+  axes[1].set_title("image_batch")
+  # Ajustar el espacio entre las imágenes
+  plt.tight_layout()
+  # Mostrar el grid
+  plt.show()
+  
+# Definir la función volshow
+def volshow(orig, n=120):
+  # Crear un grid de 3 imagenes horizontales
+  fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+  # Mostrar la rebanada n de orig en cada imagen
+  axes[0].imshow(orig[n, :, :]) # Rebanada en el eje 0
+  axes[1].imshow(orig[:, n, :]) # Rebanada en el eje 1
+  axes[2].imshow(orig[:, :, n]) # Rebanada en el eje 2
+  # Ajustar el espacio entre las imagenes
+  plt.tight_layout()
+  # Calcular los valores estadísticos de orig
+  max_val = np.max(orig) # Valor máximo
+  min_val = np.min(orig) # Valor mínimo
+  median_val = np.median(orig) # Valor mediano
+  mean_val = np.mean(orig) # Valor medio
+  # Crear una leyenda con los valores estadísticos
+  legend = f"Max: {max_val}, Min: {min_val}, Median: {median_val}, Mean: {mean_val}"
+  # Añadir la leyenda a la parte superior de la figura
+  fig.suptitle(legend, fontsize=16)
+  # Mostrar el grid con la leyenda
+  plt.show()
 def slice_img(orig, slice = 20):
     """
     Function that receives a 3D freesurfer image and returns a PIL image of the slice position "slice",
@@ -141,25 +261,25 @@ def add_rician_varying(im):
         
         return final_map
         
-# Conform an MRI brain image to UCHAR, RAS orientation, and 1mm isotropic voxels
-def load_and_conform_image(img_filename, interpol=1, logger=None, is_eval = False, conform_type = 2, intensity_rescaling = False):
+def load_and_conform_image(img_filename, interpol=3, logger=None, is_eval = False, intensity_rescaling=True, conform_type = 0, keep_dims = True):
     """
     Function to load MRI image and conform it to UCHAR, RAS orientation and 1mm isotropic voxels size
     (if it does not already have this format)
     :param str img_filename: path and name of volume to read
-    :param str conform_type: (0: Cubic shape of dims = max(img_filename.shape) and voxdim of minimum voxdim. 1: Cubic shape of dims 256^3. 2: Keep dimensions) 
+    :param str conform_type: (0=min_vox_size+max_im_size, 1=std(1.0/256)) 
     :param int interpol: interpolation order for image conformation (0=nearest,1=linear(default),2=quadratic,3=cubic)
     :return: nibabel.MGHImage header_info: header information of the conformed image
     :return: np.ndarray affine_info: affine information of the conformed image
     :return: nibabel.MGHImage orig: conformed image
     """
     orig = nib.load(img_filename)
-    orig = nib.funcs.squeeze_image(orig)
+    zoom = orig.header.get_zooms()
     max_orig = orig.get_fdata().max()
     min_orig = orig.get_fdata().min()
-    zoom = orig.header.get_zooms()
     # orig = (orig - orig.min) / (orig.max-orig.min)
     ishape = orig.shape
+    if len(orig.shape) == 4:
+        orig = orig.slicer[:,:,:,0]
     max_shape = max(ishape)
     if not is_conform(orig):
 
@@ -180,14 +300,14 @@ def load_and_conform_image(img_filename, interpol=1, logger=None, is_eval = Fals
         if img_filename[-7:] == ".nii.gz" or img_filename[-4:] == ".nii":
             if not check_affine_in_nifti(orig, logger=logger):
                 sys.exit("ERROR: inconsistency in nifti-header. Exiting now.\n")
-
+        
         # conform
         if conform_type == 0:
-            orig = conform(orig, order = interpol, conform_type = conform_type, intensity_rescaling = intensity_rescaling)
+            orig = conform_fix(orig, interpol, intensity_rescaling=intensity_rescaling, keep_dims = keep_dims)
         elif conform_type == 1:
-            orig = conform_std(orig, interpol, intensity_rescaling)
+            orig = conform_std(orig, interpol)
         elif conform_type == 2:
-            orig = conform(orig, order = interpol, conform_type = conform_type, intensity_rescaling = intensity_rescaling)
+            orig = conform_fix(orig, interpol, intensity_rescaling=intensity_rescaling, keep_dims = keep_dims)
 
     # Collect header and affine information
     header_info = orig.header
@@ -198,7 +318,7 @@ def load_and_conform_image(img_filename, interpol=1, logger=None, is_eval = Fals
     else:
         return header_info, affine_info, orig
     
-def load_and_conform_image_sitk(img_filename, interpol=1, logger=None, is_eval = False, conform_type = 2, intensity_rescaling = False):
+def load_and_conform_image_sitk(img_filename, interpol=3, logger=None, is_eval = True, conform_type = 2, intensity_rescaling = True):
     """
     Function to load MRI image and conform it to UCHAR, RAS orientation and 1mm isotropic voxels size
     (if it does not already have this format)
@@ -210,92 +330,57 @@ def load_and_conform_image_sitk(img_filename, interpol=1, logger=None, is_eval =
     :return: nibabel.MGHImage orig: conformed image
     """
     orig = sitk.ReadImage(img_filename)
+    logger.info('Conforming image to RAS orientation... ')
     orig = sitk.DICOMOrient(orig, 'RAS')
     zoom = orig.GetSpacing()
-    ishape = orig.GetSize()
-    max_shape = max(ishape)
-    # if len(ishape) == 4:
-    #     extract_filter = sitk.ExtractImageFilter()
-    #     extract_filter.SetSize([ishape[0], ishape[1], ishape[2]])
-    #     orig = extract_filter.Execute(orig)
-    
     orig_img = sitk.GetArrayFromImage(orig)
-    orig_img = np.transpose(orig_img, (2, 1, 0))
     max_orig = orig_img.max()
     min_orig = orig_img.min()
-    
-    if not is_conform_itk(orig):
-        if logger is not None:
-            if conform_type == 0:
-                logger.info('Conforming image to UCHAR, RAS orientation, and '+str(zoom)+'mm isotropic voxels. Final Volume Shape: '+str(max_shape)+'x'+str(max_shape)+'x'+str(max_shape)+' voxels')
-            else:
-                logger.info('Conforming image to UCHAR, RAS orientation, and 1.0mm isotropic voxels. Final Volume Shape: 256x256x256 voxels')
-        else:
-            if conform_type == 0:
-                print('Conforming image to UCHAR, RAS orientation, and '+str(zoom)+'mm isotropic voxels. Final Volume Shape: '+str(max_shape)+'x'+str(max_shape)+'x'+str(max_shape)+' voxels')
-            else:
-                print('Conforming image to UCHAR, RAS orientation, and 1.0mm isotropic voxels. Final Volume Shape: 256x256x256 voxels')
-        if len(orig_img.shape) > 3 and orig_img.shape[3] != 1:
-            sys.exit('ERROR: Multiple input frames (' + format(orig.shape[3]) + ') not supported!')
-
-        # Check affine if image is nifti image
-        if img_filename[-7:] == ".nii.gz" or img_filename[-4:] == ".nii":
-            if not check_affine_in_nifti_itk(orig, logger=logger):
-                sys.exit("ERROR: inconsistency in nifti-header. Exiting now.\n")
-            
-            
-            # # Split the filename into base and extension
-            # base, ext = os.path.splitext(img_filename)
-            # # If the extension is .gz, split again to get the .nii part
-            # if ext == ".gz":
-            #     base, ext = os.path.splitext(base)
-            # # Add _temp to the base and join with the extension
-            # now = datetime.now() # get current local datetime object
-            # time_string = now.strftime("%Y_%m_%d_%H_%M_%S") # format as string
-            # img_filename_temp = base + "_temp_" + time_string + ext
-            # # Write the orig image object to the temp file
-            # sitk.WriteImage(orig, img_filename_temp)
-            # orig_temp = nib.load(img_filename_temp)
-            
-            # if not check_affine_in_nifti(orig_temp, logger=logger):
-            #     sys.exit("ERROR: inconsistency in nifti-header. Exiting now.\n")
-            
-            # # Delete the temp file
-            # del orig_temp
-            # try:
-            #     os.remove(img_filename_temp)
-            # except PermissionError:
-            #     print("No se pudo eliminar el archivo temporal")
-            
-            
-            # with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            #     img_filename_temp = tmp.name # get the name of the temporary file
-            #     print(img_filename_temp) # prints something like '/tmp/tmpa_1di3b'
-            #     # write the image using sitk.WriteImage()
-            #     sitk.WriteImage(orig, img_filename_temp)
-            #     orig_temp = nib.load(img_filename_temp)
-            #     if not check_affine_in_nifti(orig_temp, logger=logger):
-            #         sys.exit("ERROR: inconsistency in nifti-header. Exiting now.\n")
-            #     del orig_temp
-            #     os.unlink(img_filename_temp)
-            
-            
-            # if not check_affine_in_nifti(orig, logger=logger):
-            #     sys.exit("ERROR: inconsistency in nifti-header. Exiting now.\n")
-
-        # conform
-        if conform_type == 0:
-            orig = conform_itk(orig, order = interpol, conform_type = conform_type, intensity_rescaling = intensity_rescaling)
-        elif conform_type == 1:
-            orig = conform_std(orig, interpol, intensity_rescaling)
-        elif conform_type == 2:
-            orig = conform_itk(orig, order = interpol, conform_type = conform_type, intensity_rescaling = intensity_rescaling)
-    orig_array = sitk.GetArrayFromImage(orig)
-    orig_array = np.transpose(orig_array, (2, 1, 0))
+    orig_img = np.transpose(orig_img, (2, 1, 0)) 
+    interp_sitk, _, _ = conform_itk(orig, order = interpol, intensity_rescaling = intensity_rescaling)
     if is_eval:
-        return orig, orig_array, zoom, max_orig, min_orig
+        return orig, interp_sitk, zoom, max_orig, min_orig
     else:
-        return orig, orig_array
+        return orig, interp_sitk
+
+def load_and_rescale_image_sitk(img_filename, logger=None, is_eval = True, intensity_rescaling = True):
+    """
+    
+
+    Parameters
+    ----------
+    img_filename : TYPE
+        DESCRIPTION.
+    interpol : TYPE, optional
+        DESCRIPTION. The default is 3.
+    logger : TYPE, optional
+        DESCRIPTION. The default is None.
+    is_eval : TYPE, optional
+        DESCRIPTION. The default is True.
+    conform_type : TYPE, optional
+        DESCRIPTION. The default is 2.
+    intensity_rescaling : TYPE, optional
+        DESCRIPTION. The default is True.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+    orig = sitk.ReadImage(img_filename)
+    # logger.info('Conforming image to RAS orientation... ')
+    # orig = sitk.DICOMOrient(orig, 'RAS')
+    zoom = orig.GetSpacing()
+    orig_img = sitk.GetArrayFromImage(orig)
+    max_orig = orig_img.max()
+    min_orig = orig_img.min()
+    orig_img = np.transpose(orig_img, (2, 1, 0)) 
+    interp_sitk = conform_itk(orig, intensity_rescaling = intensity_rescaling)
+    if is_eval:
+        return orig_img, interp_sitk, zoom, max_orig, min_orig
+    else:
+        return orig, interp_sitk
     
 def load_and_keep_dims(img_filename, interpol=1, logger=None, is_eval = False, conform_type = 0, intensity_rescaling = False):
     """
@@ -477,22 +562,29 @@ def save_image(img_array, affine_info, header_info, save_as):
         ## For correct outputs, nii.gz files should be saved using the nifti1 sub-module's save():
         nib.nifti1.save(mgh_img, save_as)
 
-
-# Transformation for mapping
-def transform_axial(vol, sagittal2axial=True):
-    """
-    Function to transform volume into Axial axis and back
-    :param np.ndarray vol: image volume to transform
-    :param bool coronal2axial: transform from coronal to axial = True (default),
-                               transform from axial to coronal = False
-    :return: np.ndarray: transformed image volume
-    """
-    if sagittal2axial:
-        vol = np.moveaxis(vol, [0, 1, 2], [1, 2, 0])
-        return vol
+def transform_sagittal(vol, coronal2sagittal=True):
+    if coronal2sagittal:
+        return np.moveaxis(vol, [0, 1, 2], [2, 1, 0])
     else:
-        vol = np.moveaxis(vol, [1, 2, 0], [0, 1, 2])
-        return vol
+        return np.moveaxis(vol, [0, 1, 2], [2, 1, 0])
+    
+def transform_axial(vol, coronal2axial=True):
+    if coronal2axial:
+        return np.moveaxis(vol, [0, 1, 2], [1, 2, 0])
+    else:
+        return np.moveaxis(vol, [0, 1, 2], [2, 0, 1])
+    
+def process_second_axis(vol):
+    # This function will put the second axis in the first position
+    # np.moveaxis(vol, [0, 1, 2], [1, 0, 2])
+    vol2 = np.moveaxis(vol, [0, 1, 2], [2, 0, 1])
+    return vol2
+
+def process_third_axis(vol):
+    # This function will put the third axis in the first position
+    # return np.moveaxis(vol, [0, 1, 2], [2, 1, 0])
+    vol2 = np.moveaxis(vol, [0, 1, 2], [1, 2, 0])
+    return vol2
 
 
 def transform_coronal(vol, sagittal2coronal=True):
@@ -509,26 +601,7 @@ def transform_coronal(vol, sagittal2coronal=True):
         return np.moveaxis(vol, [1, 0, 2], [0, 1, 2])
 
 
-# Thick slice generator (for eval) and blank slices filter (for training)
-# def get_thick_slices(img_data, slice_thickness=3, anisotropic = True):
-#     """
-#     Function to extract thick slices from the image 
-#     (feed slice_thickness preceeding and suceeding slices to network, 
-#     denoise only middle one) Added a padding stage so all the images are the 
-#     :param np.ndarray img_data: 3D MRI image read in with nibabel 
-#     :param int slice_thickness: number of slices to stack on top and below slice of interest (default=3) 
-#     :return: np.ndarray img_data_thick: image array containing the extracted slices
-#     """
-#     h, w, d = img_data.shape
-#     img_data_pad = np.expand_dims(np.pad(img_data, ((0, 0), (0, 0), (slice_thickness, slice_thickness)), mode='edge'),
-#                                   axis=3)
-#     img_data_thick = np.ndarray((h, w, d, 0), dtype=np.uint8)
-    
-#     for slice_idx in range(2 * slice_thickness + 1):
-#         img_data_thick = np.append(img_data_thick, img_data_pad[:, :, slice_idx:d + slice_idx, :], axis=3)
-#     return img_data_thick
-
-def get_thick_slices(img_data, slice_thickness=3, anisotropic = True):
+def get_thick_slices(img_data, slice_thickness=3, anisotropic = False):
     """
     Function to extract thick slices from the image 
     (feed slice_thickness preceeding and suceeding slices to network, 
@@ -543,15 +616,15 @@ def get_thick_slices(img_data, slice_thickness=3, anisotropic = True):
                                   axis=3)
     img_data_thick = np.ndarray((h, w, d, 0), dtype=np.uint8)
     
-    if anisotropic:
-        # If anisotropic is True, use only the middle slice and repeat it
-        for slice_idx in range(2 * slice_thickness + 1):
-            img_data_thick = np.append(img_data_thick, np.expand_dims(img_data, axis=3), axis=3)
+    # if anisotropic:
+    #     # If anisotropic is True, use only the middle slice and repeat it
+    #     for slice_idx in range(2 * slice_thickness + 1):
+    #         img_data_thick = np.append(img_data_thick, np.expand_dims(img_data, axis=3), axis=3)
 
-    else:
+    # else:
         # If anisotropic is False, use consecutive slices as usual
-        for slice_idx in range(2 * slice_thickness + 1):
-            img_data_thick = np.append(img_data_thick, img_data_pad[:, :, slice_idx:d + slice_idx, :], axis=3)
+    for slice_idx in range(2 * slice_thickness + 1):
+        img_data_thick = np.append(img_data_thick, img_data_pad[:, :, slice_idx:d + slice_idx, :], axis=3)
 
     return img_data_thick
 
@@ -987,67 +1060,121 @@ def get_largest_cc(segmentation):
     return largest_cc
 
 
-# Class Operator for image loading (orig only)
 class OrigDataThickSlices(Dataset):
-    """
-    Class to load a given image and segmentation and prepare it
-    for network training.
-    """
-    def __init__(self, img_filename, orig, plane='Axial', slice_thickness=3, transforms=None, anisotropic = True):
-
+    def __init__(self, img_filename, orig, plane='First', slice_thickness=3, transforms=None):
         try:
             self.img_filename = img_filename
             self.plane = plane
             self.slice_thickness = slice_thickness
-            self.anisotropic = anisotropic
-            orig.astype(np.float64)
+            orig.astype(np.float32)
             orig = (orig-orig.min())/(orig.max() - orig.min())
-            # Transform Data as needed
-            if plane == 'Sagittal':
-                #Volume dims are (Sagittal, Coronal, Axial), therefore, 
-                #we do not need to change the axis .
-                print('Loading Sagittal')
-
-            elif plane == 'Axial':
-                #Volume dims are (Sagittal, Coronal, Axial), therefore, we have 
-                #to change the Axial dimension to the first dimension.
-                orig = transform_axial(orig)
-                print('Loading Axial')
-
+            if plane == 'Second':
+                orig = process_second_axis(orig)
+                print('Loading second axis ....')
+            elif plane == 'Third':
+                orig = process_third_axis(orig)
+                print('Loading third axis ....')
             else:
-                #Volume dims are (Sagittal, Coronal, Axial), therefore, we have 
-                #to change the Coronal dimension to the first dimension.
-                orig = transform_coronal(orig)
-                print('Loading Coronal.')
-
-            # Create Thick Slices
-            orig_thick = get_thick_slices(orig, self.slice_thickness, self.anisotropic)
-            
-            # # Make 4D
+                print('Loading first axis ....')
+            orig_thick = get_thick_slices(orig, self.slice_thickness)
             # orig_thick = np.transpose(orig_thick, (2, 0, 1, 3))
             self.images = orig_thick
-
             self.count = self.images.shape[0]
-
             self.transforms = transforms
-
             print("Successfully loaded Image from {}".format(img_filename))
-
         except Exception as e:
             print("Loading failed. {}".format(e))
-
     def __getitem__(self, index):
-
         img = self.images[index]
-
         if self.transforms is not None:
             img = self.transforms(img)
-
         return {'image': img}
-
     def __len__(self):
         return self.count
     
+class OrigDataThickSlices2(Dataset):
+    def __init__(self, img_filename, orig, plane='Axial', slice_thickness=3, transforms=None):
+        try:
+            self.img_filename = img_filename
+            self.plane = plane
+            self.slice_thickness = slice_thickness
+            orig.astype(np.float32)
+            orig = (orig-orig.min())/(orig.max() - orig.min())
+            orig = np.transpose(orig, (0, 2, 1))
+            orig = np.flip(orig, axis=0)
+            orig = np.flip(orig, axis=1)
+            if plane == 'Sagittal':
+                orig = transform_sagittal(orig)
+                print('Loading Sagittal')
+            elif plane == 'Axial':
+                orig = transform_axial(orig)
+                print('Loading Axial')
+            else:
+                print('Loading Coronal.')
+            orig_thick = get_thick_slices(orig, self.slice_thickness)
+            orig_thick2 = np.transpose(orig_thick, (0, 2, 1, 3))
+            
+            self.images = orig_thick2
+            self.count = self.images.shape[0]
+            self.transforms = transforms
+            print("Successfully loaded Image from {}".format(img_filename))
+        except Exception as e:
+            print("Loading failed. {}".format(e))
+    def __getitem__(self, index):
+        img = self.images[index]
+        if self.transforms is not None:
+            img = self.transforms(img)
+        return {'image': img}
+    def __len__(self):
+        return self.count
+def transform_axial_sitk(vol, sagittal2axial=True):
+    if sagittal2axial:
+        vol = np.moveaxis(vol, [0, 1, 2], [1, 2, 0])
+        return vol
+    else:
+        vol = np.moveaxis(vol, [1, 2, 0], [0, 1, 2])
+        return vol
+    
+def transform_coronal_sitk(vol, sagittal2coronal=True):
+    if sagittal2coronal:
+        return np.moveaxis(vol, [0, 1, 2], [2, 0, 1])
+    else:
+        return np.moveaxis(vol, [1, 0, 2], [0, 1, 2])
+    
+class OrigDataThickSlicesSitk(Dataset):
+    def __init__(self, img_filename, orig, input_channels = 7, plane='Axial', slice_thickness=3, transforms=None):
+        try:
+            #At this point, we have a Sagittal, Coronal, Axial image.
+            self.img_filename = img_filename
+            self.plane = plane
+            self.slice_thickness = slice_thickness
+            orig.astype(np.float32)
+            orig = (orig-orig.min())/(orig.max() - orig.min())
+            if plane == 'Sagittal':
+                print('Loading Sagittal')
+            elif plane == 'Axial':
+                #Transforms to Axial, Sagittal, Coronal
+                orig = transform_axial_sitk(orig)
+                print('Loading Axial')
+            else:
+                #Transforms to Coronal, Axial, Sagittal
+                orig = transform_coronal_sitk(orig)
+                print('Loading Coronal.')
+            slice_thickness = (input_channels - 1)/2
+            orig_thick = get_thick_slices(orig, slice_thickness = self.slice_thickness)
+            self.images = orig_thick
+            self.count = self.images.shape[0]
+            self.transforms = transforms
+            print("Successfully loaded Image from {}".format(img_filename))
+        except Exception as e:
+            print("Loading failed. {}".format(e))
+    def __getitem__(self, index):
+        img = self.images[index]
+        if self.transforms is not None:
+            img = self.transforms(img)
+        return {'image': img}
+    def __len__(self):
+        return self.count
 
 # class OrigDataTwoSlices(Dataset):
 #     """
@@ -1111,6 +1238,88 @@ class OrigDataThickSlices(Dataset):
 ##
 
 # Operator to load hdf5-file for training
+class AsegDatasetWithAugmentation2(Dataset):
+    """
+    Class for loading aseg file with augmentations (transforms)
+    """
+    def __init__(self, params, transforms=None, is_val = False):
+
+        # Load the h5 file and save it to the dataset
+        try:
+            self.params = params
+
+            # Open file in reading mode
+            with h5py.File(self.params['dataset_name'], "r") as hf:
+                self.images = np.array(hf.get('orig_dataset_imgs')[:])
+                self.orig_zooms = np.array(hf.get('orig_zooms')[:])
+                self.subjects = np.array(hf.get("subject")[:])
+            self.count = self.images.shape[0]
+            self.transforms = transforms
+            
+            print("Successfully loaded {} with plane: {}".format(params["dataset_name"], params["plane"]))
+
+        except Exception as e:
+            print("Loading failed: {}".format(e))
+
+    def get_subject_names(self):
+        return self.subjects
+    
+    def _get_patch(self, img):
+        img = np.moveaxis(img,(0,1,2),(2,1,0))
+        img = img/255.0
+        return img
+    
+    def __getitem__(self, index):
+
+        img = self.images[index]
+        zoom = self.orig_zooms[index]
+        img = self._get_patch(img)
+        return {'img': img, 'zoom':zoom}
+    def __len__(self):
+        return self.count
+    
+    def concatenate_Thick_GT(self, lr, hr):
+        hr = torch.from_numpy(hr)
+        hr2 = hr.float()
+        hr2 = torch.unsqueeze(hr,0)
+        lr = torch.from_numpy(lr)
+        lrhr = torch.cat([hr2,lr],0) #first 7 arrays of dim 0 are lr, last is hr
+        return lrhr
+    
+class MyBatchSampler(Sampler):
+    def __init__(self, a_indices, b_indices, c_indices, d_indices, e_indices, f_indices, g_indices,  batch_size): 
+        self.a_indices = a_indices
+        self.b_indices = b_indices
+        self.c_indices = c_indices
+        self.d_indices = d_indices
+        self.e_indices = e_indices
+        self.f_indices = f_indices
+        self.g_indices = g_indices
+        self.batch_size = batch_size
+    
+    def __iter__(self):
+        random.shuffle(self.a_indices)
+        random.shuffle(self.b_indices)
+        random.shuffle(self.c_indices)
+        random.shuffle(self.d_indices)
+        random.shuffle(self.e_indices)
+        random.shuffle(self.f_indices)
+        random.shuffle(self.g_indices)
+        a_batches = chunk(self.a_indices, self.batch_size)
+        b_batches = chunk(self.b_indices, self.batch_size)
+        c_batches = chunk(self.c_indices, self.batch_size)
+        d_batches = chunk(self.d_indices, self.batch_size)
+        e_batches = chunk(self.e_indices, self.batch_size)
+        f_batches = chunk(self.f_indices, self.batch_size)
+        g_batches = chunk(self.g_indices, self.batch_size)
+        all_batches = list(a_batches + b_batches + c_batches + d_batches + e_batches + f_batches + g_batches)
+        all_batches = [batch.tolist() for batch in all_batches]
+        random.shuffle(all_batches)
+        return iter(all_batches)
+    
+    def __len__(self):
+        return (len(self.a_indices) + len(self.b_indices) + len(self.c_indices) + len(self.d_indices) + len(self.e_indices) + len(self.f_indices) + len(self.g_indices)) // self.batch_size
+
 class AsegDatasetWithAugmentation(Dataset):
     """
     Class for loading aseg file with augmentations (transforms)
